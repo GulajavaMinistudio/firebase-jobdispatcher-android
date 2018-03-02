@@ -16,17 +16,25 @@
 
 package com.firebase.jobdispatcher;
 
+import static com.firebase.jobdispatcher.GooglePlayReceiver.getJobCoder;
+import static com.firebase.jobdispatcher.TestUtil.assertBundlesEqual;
 import static junit.framework.Assert.assertFalse;
 import static junit.framework.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
+import android.content.Context;
+import android.os.Bundle;
 import android.os.IBinder;
-import android.os.Message;
+import android.os.RemoteException;
+import android.support.v4.util.Pair;
 import com.firebase.jobdispatcher.JobInvocation.Builder;
+import com.google.common.base.Optional;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -35,82 +43,227 @@ import org.mockito.MockitoAnnotations;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
-/**
- * Test for {@link JobServiceConnection}.
- */
+/** Test for {@link JobServiceConnection}. */
 @RunWith(RobolectricTestRunner.class)
 @Config(constants = BuildConfig.class, manifest = Config.NONE, sdk = 23)
 public class JobServiceConnectionTest {
 
-    JobInvocation job = new Builder()
-            .setTag("tag")
-            .setService(TestJobService.class.getName())
-            .setTrigger(Trigger.NOW)
-            .build();
+  JobInvocation job =
+      new Builder()
+          .setTag("tag")
+          .setService(TestJobService.class.getName())
+          .setTrigger(Trigger.NOW)
+          .build();
 
-    @Mock
-    Message messageMock;
-    @Mock
-    JobService.LocalBinder binderMock;
-    @Mock
-    JobService jobServiceMock;
+  Bundle jobData = getJobCoder().encode(job, new Bundle());
 
-    JobServiceConnection connection;
+  @Mock Context contextMock;
+  JobServiceConnection connection;
+  ManuallyMockedRemoteJobService binderMock;
+  IJobCallback noopCallback;
 
-    @Before
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        when(binderMock.getService()).thenReturn(jobServiceMock);
-        connection = new JobServiceConnection(job, messageMock);
+  /**
+   * The combination of Mockito and ShadowBinder ends up meaning we can't just wrap the IBinder in a
+   * spy. So this is a manually created mock object.
+   */
+  private static class ManuallyMockedRemoteJobService extends IRemoteJobService.Stub {
+
+    Pair<Bundle, IJobCallback> startArguments;
+    Pair<Bundle, Boolean> stopArguments;
+
+    Optional<RemoteException> startException = Optional.absent();
+    Optional<RemoteException> stopException = Optional.absent();
+
+    @Override
+    public void start(Bundle invocationData, IJobCallback callback) throws RemoteException {
+      startArguments = Pair.create(invocationData, callback);
+      if (startException.isPresent()) {
+        throw startException.get();
+      }
     }
 
-    @Test
-    public void fullConnectionCycle() {
-        assertFalse(connection.isBound());
-
-        connection.onServiceConnected(null, binderMock);
-        verify(jobServiceMock).start(job, messageMock);
-        assertTrue(connection.isBound());
-
-        connection.onStop();
-        verify(jobServiceMock).stop(job);
-        assertTrue(connection.isBound());
-
-        connection.onServiceDisconnected(null);
-        assertFalse(connection.isBound());
+    @Override
+    public void stop(Bundle invocationData, boolean needToSendResult) throws RemoteException {
+      stopArguments = Pair.create(invocationData, needToSendResult);
+      if (stopException.isPresent()) {
+        throw stopException.get();
+      }
     }
 
-    @Test
-    public void onServiceConnected_shouldNotSendExecutionRequestTwice() {
-        assertFalse(connection.isBound());
-
-        connection.onServiceConnected(null, binderMock);
-        verify(jobServiceMock).start(job, messageMock);
-        assertTrue(connection.isBound());
-        reset(jobServiceMock);
-
-        connection.onServiceConnected(null, binderMock);
-        verify(jobServiceMock, never()).start(job, messageMock); // start should not be called again
-
-        connection.onStop();
-        verify(jobServiceMock).stop(job);
-        assertTrue(connection.isBound());
-
-        connection.onServiceDisconnected(null);
-        assertFalse(connection.isBound());
+    void verifyStartArguments(Bundle invocationData, IJobCallback callback) {
+      assertBundlesEqual(invocationData, startArguments.first);
+      assertSame(callback, startArguments.second);
     }
 
-    @Test
-    public void stopOnUnboundConnection() {
-        assertFalse(connection.isBound());
-        connection.onStop();
-        verify(jobServiceMock, never()).onStopJob(job);
+    void verifyStopArguments(Bundle invocationData, boolean needToSendResult) {
+      assertBundlesEqual(invocationData, stopArguments.first);
+      assertEquals(needToSendResult, stopArguments.second);
     }
 
-    @Test
-    public void onServiceConnectedWrongBinder() {
-        IBinder binder = mock(IBinder.class);
-        connection.onServiceConnected(null, binder);
-        assertFalse(connection.isBound());
+    void setStartException(RemoteException remoteException) {
+      startException = Optional.of(remoteException);
     }
+
+    void setStopException(RemoteException remoteException) {
+      stopException = Optional.of(remoteException);
+    }
+
+    void reset() {
+      startArguments = null;
+      stopArguments = null;
+    }
+  }
+
+  @Before
+  public void setUp() {
+    MockitoAnnotations.initMocks(this);
+    noopCallback =
+        new IJobCallback.Stub() {
+          @Override
+          public void jobFinished(Bundle invocationData, @JobService.JobResult int result) {}
+        };
+    connection = new JobServiceConnection(noopCallback, contextMock);
+    connection.startJob(job);
+    binderMock = new ManuallyMockedRemoteJobService();
+  }
+
+  @Test
+  public void fullConnectionCycleWithStop() throws Exception {
+    assertFalse(connection.wasUnbound());
+    connection.onServiceConnected(null, binderMock);
+    binderMock.verifyStartArguments(jobData, noopCallback);
+    assertFalse(connection.wasUnbound());
+
+    connection.onStop(job, true);
+    binderMock.verifyStopArguments(jobData, true);
+    assertFalse(connection.wasUnbound());
+
+    connection.onJobFinished(job);
+    assertTrue(connection.wasUnbound());
+
+    connection.onServiceDisconnected(null);
+    assertTrue(connection.wasUnbound());
+  }
+
+  @Test
+  public void fullConnectionCycle() throws Exception {
+    assertFalse(connection.wasUnbound());
+    connection.onServiceConnected(null, binderMock);
+    binderMock.verifyStartArguments(jobData, noopCallback);
+    assertFalse(connection.wasUnbound());
+
+    connection.onJobFinished(job);
+    assertTrue(connection.wasUnbound());
+
+    connection.onServiceDisconnected(null);
+    assertTrue(connection.wasUnbound());
+  }
+
+  @Test
+  public void onServiceDisconnected() throws Exception {
+    connection.onServiceConnected(null, binderMock);
+    binderMock.verifyStartArguments(jobData, noopCallback);
+    assertFalse(connection.wasUnbound());
+
+    connection.onServiceDisconnected(null);
+    assertTrue(connection.wasUnbound());
+  }
+
+  @Test
+  public void onServiceConnected_shouldNotSendExecutionRequestTwice() throws Exception {
+    assertFalse(connection.wasUnbound());
+
+    connection.onServiceConnected(null, binderMock);
+    binderMock.verifyStartArguments(jobData, noopCallback);
+    assertFalse(connection.wasUnbound());
+    binderMock.reset();
+
+    connection.onServiceConnected(null, binderMock);
+    assertNull(binderMock.startArguments); // start should not be called again
+
+    connection.onStop(job, true);
+    binderMock.verifyStopArguments(jobData, true);
+    assertFalse(connection.wasUnbound());
+
+    connection.onJobFinished(job);
+    assertTrue(connection.wasUnbound());
+
+    connection.onServiceDisconnected(null);
+    assertTrue(connection.wasUnbound());
+  }
+
+  @Test
+  public void stopWithResult_keepConnectionOpen() throws Exception {
+    assertFalse(connection.wasUnbound());
+
+    connection.onStop(job, true);
+
+    assertFalse(connection.wasUnbound());
+    verify(contextMock, never()).unbindService(connection);
+  }
+
+  @Test
+  public void onServiceConnectedWrongBinder_doesNotThrow() throws Exception {
+    IBinder binder = mock(IBinder.class);
+    connection.onServiceConnected(null, binder);
+  }
+
+  @Test
+  public void onStop_doNotSendResult() throws Exception {
+    connection.onServiceConnected(null, binderMock);
+    binderMock.verifyStartArguments(jobData, noopCallback);
+    assertFalse(connection.wasUnbound());
+
+    connection.onStop(job, false);
+    binderMock.verifyStopArguments(jobData, false);
+    assertTrue(connection.wasUnbound());
+    verify(contextMock).unbindService(connection);
+  }
+
+  @Test
+  public void unbind() throws Exception {
+    connection.onServiceConnected(null, binderMock);
+    binderMock.verifyStartArguments(jobData, noopCallback);
+    assertFalse(connection.wasUnbound());
+
+    connection.unbind();
+
+    assertTrue(connection.wasUnbound());
+    verify(contextMock).unbindService(connection);
+  }
+
+  @Test
+  public void unbind_throws_noException() throws Exception {
+    connection.onServiceConnected(null, binderMock);
+    binderMock.verifyStartArguments(jobData, noopCallback);
+    assertFalse(connection.wasUnbound());
+
+    doThrow(IllegalArgumentException.class).when(contextMock).unbindService(connection);
+
+    connection.unbind();
+
+    assertTrue(connection.wasUnbound());
+    verify(contextMock).unbindService(connection);
+  }
+
+  @Test
+  public void onStop_unbindsAfterRemoteException() throws Exception {
+    connection.onServiceConnected(null, binderMock);
+    binderMock.verifyStartArguments(jobData, noopCallback);
+    assertFalse(connection.wasUnbound());
+
+    binderMock.setStopException(new RemoteException("something bad happened"));
+    connection.onStop(job, true);
+    binderMock.verifyStopArguments(jobData, true);
+    assertTrue(connection.wasUnbound());
+    verify(contextMock).unbindService(connection);
+  }
+
+  @Test
+  public void serviceConnected_unbindsAfterRemoteException() throws Exception {
+    binderMock.setStartException(new RemoteException("something bad happened"));
+
+    connection.onServiceConnected(null, binderMock);
+    assertTrue(connection.wasUnbound());
+  }
 }
