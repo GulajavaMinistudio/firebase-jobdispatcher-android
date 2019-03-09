@@ -3,9 +3,17 @@
 [ci-badge]: https://travis-ci.org/firebase/firebase-jobdispatcher-android.svg?branch=master
 [ci-link]: https://travis-ci.org/firebase/firebase-jobdispatcher-android
 
+**With the launch of Android JetPack’s [WorkManager][] at Google I/O 2018 and
+its upcoming graduation to beta, we recommend looking at WorkManager for new
+projects and to submit your feature requests for that offering.**
+
+**Firebase Job Dispatcher will not be compatible with apps targeting releases
+beyond Android Q. Moving forward, we will focus our investments and efforts
+towards improving WorkManager.**
+
 The Firebase JobDispatcher is a library for scheduling background jobs in your
 Android app. It provides a [JobScheduler][]-compatible API that works on all
-recent versions of Android (API level 9+) that have Google Play services
+recent versions of Android (API level 14+) that have Google Play services
 installed.
 
 ## Overview
@@ -30,13 +38,13 @@ active network connection, only that the connection was recently changed.
 
 In recognition of these issues, the Android framework team created the
 [JobScheduler][]. This provides developers a simple way of specifying runtime
-constraints on their jobs. Available constraints include [network
-type][js-network-type], [charging state][js-charging-state], and [idle
-state][js-idle-state].
+constraints on their jobs. Available constraints include
+[network type][js-network-type], [charging state][js-charging-state], and
+[idle state][js-idle-state].
 
-This library uses the scheduling engine inside [Google Play
-services](formerly the [GCM Network Manager][nts] component) to provide a
-backwards compatible (back to Gingerbread) [JobScheduler][]-like API.
+This library uses the scheduling engine inside
+[Google Play services](formerly the [GCM Network Manager][nts] component) to
+provide a backwards compatible (back to Gingerbread) [JobScheduler][]-like API.
 
 This I/O presentation has more information on why background services can be
 harmful and what you can do about them:
@@ -61,16 +69,18 @@ Play services installed.
 
 ### Comparison to other libraries
 
-Library                    | Minimum API | Requires Google Play   | Service API<sup>[1](#fn1)</sup> | Custom retry strategies
--------------------------- | ----------- | ---------------------- | ------------------------------- | -----------------------
-Framework [JobScheduler][] | 21          | No                     | JobScheduler                    | Yes
-Firebase JobDispatcher     | 14          | Yes                    | JobScheduler                    | Yes
-[evernote/android-job][]   | 14          | No<sup>[2](#fn2)</sup> | Custom                          | Yes
+Library                                     | Minimum API | Requires Google Play   | Service API<sup>[1](#fn1)</sup> | Custom retry strategies
+------------------------------------------- | ----------- | ---------------------- | ------------------------------- | -----------------------
+Framework [JobScheduler][]                  | 21          | No                     | JobScheduler                    | Yes
+Firebase JobDispatcher                      | 14          | Yes                    | JobScheduler                    | Yes
+[evernote/android-job][]                    | 14          | No<sup>[2](#fn2)</sup> | Custom                          | Yes
+Android [WorkManager][]<sup>[3](#fn3)</sup> | 14          | No<sup>[2](#fn2)</sup> | Custom                          | Yes
 
 <sup><a name="fn1">1</a></sup> Refers to the methods that need to be implemented in the
 Service subclass.<br>
-<sup><a name="fn2">2</a></sup> Uses AlarmManager to support API levels <= 21 if Google
+<sup><a name="fn2">2</a></sup> Uses AlarmManager or JobScheduler to support API levels <= 21 if Google
 Play services is unavailable.<br>
+<sup><a name="fn3">3</a></sup> Currently in alpha phase, soon to graduate to beta.</br>
 
 ## Getting started
 
@@ -79,7 +89,7 @@ Play services is unavailable.<br>
 Add the following to your `build.gradle`'s dependencies section:
 
 ```groovy
-implementation 'com.firebase:firebase-jobdispatcher:0.8.5'
+implementation 'com.firebase:firebase-jobdispatcher:0.8.6'
 ```
 
 ### Usage
@@ -213,3 +223,4 @@ Apache, see the [LICENSE](LICENSE) file.
 [JobScheduler]: https://developer.android.com/reference/android/app/job/JobScheduler.html
 [Google Play services]: https://developers.google.com/android/guides/overview
 [evernote/android-job]: https://github.com/evernote/android-job
+[WorkManager]: https://developer.android.com/topic/libraries/architecture/workmanager/
